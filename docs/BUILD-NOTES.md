@@ -1,180 +1,347 @@
-# AI 伙伴（麦麦）— 部署笔记
+# 踩坑百科（Troubleshooting Encyclopedia）
 
-**最后更新：2026-10-29 00:55** — 唱歌曲库批量上线（网易云 .ncm 解密 + 批量翻唱，30+ 首）；片段改成「乐句结尾自然收尾」。
+> 本文是「麦麦」整套系统从零到稳定运行过程中踩过的**全部坑**，按子系统归类。
+> 每条给出：**症状 → 根因 → 处理**。带 🔴 的是会让你以为「程序坏了」但其实是环境问题的坑。
+>
+> 最后更新：2026-10-29（补入本地嵌入、GPT-SoVITS/RVC 语音栈、faiss 路径问题）
 
-## 🎤 唱歌能力（已上线，10/28–29）
+---
 
-**结论先说**：GPT-SoVITS 是克隆音色、RVC 是换音色的变声器，**两者本身都不会产生旋律**（GSV 的音高由文本推、RVC 原样保留输入音高）。要真唱必须有一条「已经唱好的干声」，所以走的是社区通用做法：**原曲 → UVR5 分离人声 → RVC 换成派蒙音色**。
+## 0. 通用原则（先记住这五条，能省 80% 的排查时间）
 
-### 流水线（脚本都在 `D:\code2\AI伙伴\tools\sing\`）
-| 脚本 | 作用 |
-|---|---|
-| `decrypt_ncm.py` | 批量解密网易云 `.ncm` → `E:\ai-voice\songs\decoded`（用 PyPI `ncmdump`） |
-| `fix_ext.py` | 解密产物没有扩展名，按文件头补 `.mp3/.flac` |
-| `batch_cover.py <数量> [index文件] [起始偏移]` | 批量翻唱：UVR5 分离 → 测人声中位音高自动定变调 → RVC → 自然剪辑 → 入库 |
-| `make_song.py <原曲> <歌名> [起始秒] [时长秒] [变调]` | 单曲手动处理 |
-| `sing_cut.py` | 剪辑核心 `cut_natural()`：攒到 42s 后吸附到**乐句结尾**（静音间隙）+150ms 淡出 |
-| `merge_index.py` | 并行 worker 的 `index_b.json` 每 45s 合并进主 `index.json` |
-| `run_a.cmd` / `run_b.cmd` | 两个并行 worker 的启动壳（**必须 GBK 编码**，UTF-8 会让 cmd 认不出中文路径） |
+1. **中文路径是隐形杀手**。faiss（C++ `fopen`）、RVC 的 `.index`、部分 Python 包都不认非 ASCII 路径。
+   凡是「文件明明存在却打不开」——先怀疑路径里有中文。
+2. **进程名 ≠ 你想象的名字**。MaiBot 的实际运行时是 `python.exe`，`maibot.exe` 只是跳板；
+   SnowLuma 是 `node.exe`。`taskkill /IM maibot.exe` 杀不到任何东西。
+3. **提示词管不住模型**。任何「必须/绝对不要」的人设规则，都有概率被模型无视；
+   关键约束要么做**出站过滤**（代码兜底），要么接受偶发失败。
+4. **端口被占可能不是你的程序**。本机上任何 exe 都可能绑 3000/3001/9880 这类常见端口；
+   用 `Get-NetTCPConnection -LocalPort N` 找 OwningProcess，再看进程路径。
+5. **国内网络**：PyPI/HF/GitHub 直连都不可靠，且本机有 SSL 中间人——优先镜像 + `truststore`。
 
-- 变调自动判定：人声中位 f0 ≥240Hz → 0（女声/童声）；190–240 → +6；<190 → +12（男声升八度）
-- 长歌只分离**前 85 秒**（成品只要 42 秒），耗时减半
-- 两个 venv 不能混用：`sep-venv`（audio-separator + onnxruntime，做分离）/ `venv`（torch + RVC，做变声）
-- 曲库：`E:\ai-voice\sing\cache\*.wav` + `index.json`（歌名/别名/文件/时长）
+---
 
-### 插件与人格
-- `maimai-voice` 的 `sing(song="")`：命中歌名唱那首；**没命中会返回完整歌单**（所以她能如实回答"我会唱什么"）；留空随机；冷却 `sing_cooldown_seconds=180`
-- 曲库每次调用现读 `index.json` → 新增歌**不用重启** 8001（只有改插件代码才要重启）
-- 人设已改：不再写死歌单，改为「曲库里几十首都会唱，被问会唱什么就用 sing 查歌单再答」
+## 1. 链路与端口
 
-### ⚠️ 关键教训：前奏鬼叫（10/29 修）
-**症状**：《不凡》开头有一段鬼叫，不是派蒙的音色。
-**原因**：早期是「RVC 转完之后才剪」，RVC 已经把干声里前奏残留的伴奏一起变声了——那十几秒近静音的分离残留被唱成了怪声。
-**正确顺序**：`UVR 分离 → 噪声门静音前奏残留(gate_quiet) → 从第一个有声点剪掉 → 才送 RVC → 再按乐句收尾`。
-**门限**：演唱电平（rms 85 分位）的 10%，连续 0.8 秒才算开唱。实测《不凡》干声 0–16s 全是 rms 0.000–0.008 的残留，门限后完全静音，17.37s 才真正开唱。
+### 1.1 🔴 QQ 重启后消息收发全断
+**症状**：SnowLuma 面板能看到 QQ 进程，但消息不动；OneBot 端口不监听；MaiBot 日志无新消息。
+**根因**：QQ 重启后进程里**没有 hook DLL**（注入是进程级的，重启即失效）。
+**处理**：`config/runtime.json` 设 `"hookAutoLoad": true` —— SnowLuma 启动时自动扫描并注入所有 QQ 进程。
+（旧做法：登录 WebUI 5099 → `POST /api/processes/{pid}/load`，依赖密码且要手动。）
 
-### 已知坑
-- DiffSinger（任意歌词合成）放弃：HF 的 `LogiAI10/diffsinger-mobile-onnx` 只有 acoustic+vocoder，**缺音素字典**（txt_tokens 的 id↔拼音映射），喂歌词只能是乱音；要做得弄完整 OpenUtau/DiffSinger 歌手包（含 dsdict），属独立工程
-- QQ 语音是窄带压缩（每条 10–60KB），音色会略闷，属格式限制
-- 用 WMI 拉起后台进程时，含中文的 `.cmd` 必须写 GBK；`.py` 仍是 UTF-8
+### 1.2 🔴 端口「在监听」但所有接口 404
+**症状**：`Get-NetTCPConnection -LocalPort 3001` 显示 Listen，但 WS 连不上、HTTP 也 404。
+**根因**：端口被**别的程序**占用了（本项目实测被另一个项目的 Electron 服务绑走 3000/3001）。
+**处理**：查 OwningProcess → 看进程路径。
+**根治**：本项目把 SnowLuma 迁到 **3100/3101**，避开常见端口。改端口要同步改：
+- `tools/SnowLuma/config/onebot_*.json`（httpServers / wsServers 的 port）
+- `plugins/MaiBot-SnowLuma-Adapter/config.toml`（`[client] port`）
 
-## 🎙 10/28 音色切换（三轮）
-
-### 第三轮：派蒙（当前生效）
-- 模型：`E:\ai-voice\models\paimon\cn\paimon_cn.pth`（RVC v2）+ `added_IVF522_Flat_nprobe_1_paimon_cn_v2.index`（HF `paciapancakes/paimon_cn`，社区用原神中文语音训练，比自训素材强得多）
-- 链路：`edge-tts(晓伊) → RVC(派蒙)`，9880 聚合服务直接返回
-- `E:\ai-voice\voice-config.json` 关键项：`tts_engine=edge`、`rvc_enabled=true`、`rvc_model/rvc_index` 指派蒙、`rvc_pitch=4`（**用户选定**，输出 f0≈447Hz）、`rvc_index_rate=0.7`
-- **音色微调不用改代码**：`rvc_pitch`（0/+2/+4 → f0 分别约 340/396/427Hz）、`rvc_index_rate`（越大越贴训练音色）、`edge_rate`/`edge_pitch`（源 TTS 语速音高）
-- 试听样本：`D:\code2\AI伙伴\tmp\paimon\试听\`（pitch 0/+2/+4 + 服务实测两段）
-
-### 第二轮：丁美桐（已弃用，保留可切）
-- 零样本参考：`E:\ai-voice\models\ref_dmt.wav`（7.3s 她的采访回答）+ `gsv_prompt_text`（参考文本必须与音频内容一致）
-- 自训 RVC：`E:\ai-voice\models\dingmeitong.pth`（250轮 40k，最低 loss 在 202 轮，另存 `dingmeitong_200e.pth`）+ `dingmeitong.index`
-- 训练素材：`E:\ai-voice\datasets\dingmeitong\`（唱歌人声 172s + 说话 113s → 100 段/278s）；Applio 日志 `E:\ai-voice\Applio\logs\dingmeitong\`（G_*/D_* 中间权重约 6GB，可删）
-- 评价：4.6 分钟素材训出来的模型 + 7 秒零样本都"不够好听"，故改用社区模型
-- 切回方式：`tts_engine=gsv` + `rvc_enabled=false`（零样本），或 `rvc_model` 指向 dingmeitong.pth（自训）
-
-**依赖补装记录**：`E:\ai-voice\sep-venv`（audio-separator + onnxruntime，人声分离）、gsv-venv 补 `resampy`、venv 补 `tensorboard`；UVR 模型在 `E:\ai-voice\models\uvr\`。出网被中间人劫持，SSL 校验必须关（`curl -k` / requests verify=False），github 下载走 `gh-proxy.com` 前缀才快。
-
-## ⏳ 待验证（今晚）
-
-- [ ] **23:28 better-diary 自动日记**（当天聊天量充足）；23:40 有定时提醒，验证日记生成 + 空间发布
-- [ ] **新表情逻辑实机验证**：给哥哥/群里发条带情绪的消息，看她是否自主配表情包（attach_emoji 视觉规划器模式；表情池 43 张）
-
-## 🔧 10/24 晚三连修复（已验证）
-
-1. **启动脚本秒死**：.ps1 无 BOM → PowerShell 5.1 按 GBK 读中文 → 解析报错。已加 BOM（start-all.ps1 / stop-all.ps1）。
-2. **QQ 重启后链路断**：18:52 QQ 重启后进程里没有钩子，SnowLuma 只重连已有钩子、不自动注入新 QQ → OneBot 3001 永远不监听。启动脚本已加自动注入（登录 5099 API → POST /api/processes/{pid}/load）。
-3. **视觉规划器图片超限**：讯飞单请求图片数上限（错误码 10043）→ `[visual] max_image_num` 64→3，超出部分降级为文字描述（`[表情包: 标签]`）。
-
-另：表情池不含上传表情（管理器内存池只在偷学通道更新）→ 重启后从数据库全量加载，当前 43 张（28 下载 + 15 偷学）。
-
-
-## 一、系统架构
-
+### 1.3 停止脚本杀不干净，重启后端口冲突
+**症状**：明明「停了」，再启动却端口占用；或者有两套 MaiBot 在跑。
+**根因**：`uv tool` 启动的 MaiBot 有「跳板进程 + 核心进程 + 插件运行器」三种形态，
+只杀其中一种会留下孤儿。
+**处理**：按命令行匹配 `python.exe`：
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Where-Object { $_.CommandLine -match "src\.runtime|plugin_runtime|maibot\.exe" } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 ```
-手机/桌面 QQ 用户（你、群友）
-        ↓ 消息
-QQ 客户端（小号 YOUR_BOT_QQ「白粥咸萝卜」，D:\App\QQNT）
-        ↓ 进程内 Hook 注入
-SnowLuma v2.1.1 协议端（tools\SnowLuma-v2.1.1\node.exe index.mjs）
-   OneBot v11：HTTP 127.0.0.1:3000 / 正向 WS 127.0.0.1:3001
-        ↓ WebSocket + access_token
-MaiBot 1.3.15 麦麦大脑（D:\code2\AI伙伴\maibot，WebUI :8001）
-   ├─ 适配器插件 MaiBot-SnowLuma-Adapter v1.1.8（消息网关 + QZone API + 主动私聊工具）
-   ├─ Maizone（麦麦空间）：自主发说说/读好友动态/点赞/评论/回复评论
-   └─ better-diary：每晚 23:30 写睡前日记 → 发到 QQ 空间
-        ↓ OpenAI 兼容 API
-DeepSeek 官方（api.deepseek.com/v1，2026-10-28 起主用）
-   deepseek-flash（回复/规划/记忆/工具/看图，1M 上下文 + 图片输入）
-   deepseek-v4-pro（纯文本，需要更强 Agent 时可切）
-讯飞 MaaS（备用，模型定义保留，切回去只改 model_task_config）
-   xopdeepseekv4pro / xopdeepseekv4flash0731 / xsparkx2flash / xopqwen36v35b
+SnowLuma 用「可执行文件路径含 SnowLuma」+「监听 5099/3100/3101 的进程」双保险。
+
+### 1.4 健康检查的正确姿势
+| 检查 | 含义 |
+|---|---|
+| 3101 状态 **Listen** | SnowLuma 进程活着 |
+| 3101 状态 **Established** | **适配器真的连上了**（这才是链路通） |
+| 8001 Listen | MaiBot WebUI 活着 |
+| SnowLuma 日志 `hook auto-load enabled` + `login detected` | QQ 钩子已注入且已登录 |
+
+> 只看 Listen 会被「别的程序占端口」骗过。
+
+---
+
+## 2. 启动脚本与 PowerShell
+
+### 2.1 🔴 .ps1 中文全乱码 / 脚本秒退
+**根因**：Windows PowerShell 5.1 读无 BOM 的 UTF-8 会按 GBK 解码。
+**处理**：`.ps1` 必须存为 **UTF-8 with BOM**。Linux 侧编辑工具（含多数编辑器）默认不加 BOM，务必检查。
+
+### 2.2 🔴 .cmd 里写中文必乱
+**根因**：cmd.exe 用 OEM 码页（简中 = GBK）读文件。
+**处理**：`.cmd` 只放 ASCII，中文全部放 `.ps1`。或者把 `.cmd` 存成 GBK（不推荐，版本管理会乱）。
+
+### 2.3 PowerShell 直发 HTTP 时中文变乱码
+**根因**：PS5.1 默认把字符串按 Latin-1 编码进 body。
+**处理**：显式转 UTF-8 字节：
+```powershell
+Invoke-RestMethod -Body ([System.Text.Encoding]::UTF8.GetBytes($json)) -ContentType "application/json"
 ```
 
-**模型分配现状**（`maibot\config\model_config.toml`）：replyer / planner / memory / utils / fast_model / vlm 全部 → `ds-flash`（DeepSeek deepseek-flash）；embedding 仍留空（DeepSeek 无嵌入接口，记忆走 BM25）。要换成 V4-Pro：把对应任务的 `model_list` 改成 `["ds-pro"]`（注意 V4-Pro 不支持图片输入，replyer/vlm 别用它）。
+### 2.4 脚本结尾闪退看不到报错
+**处理**：脚本末尾加 `Read-Host "回车关闭窗口"`；调试时改用 `powershell -NoProfile -File xxx.ps1` 在终端里跑。
 
-## 二、账号与凭据
+---
 
-- 机器人 QQ（小号）：YOUR_BOT_QQ（白粥咸萝卜）
-- 主人 QQ（大号）：YOUR_MASTER_QQ（唯一管理员/白名单）
-- 测试群：653542979（神奇小窝）—— 适配器策略里唯一放行的群
-- 私聊白名单：仅主人 YOUR_MASTER_QQ
-- **全部凭据汇总见 `CREDENTIALS.md`**（SnowLuma WebUI 密码 / MaiBot WebUI 令牌 / 讯飞 API key）
+## 3. MaiBot 核心
 
-## 三、日常使用
+### 3.1 插件不加载：缺 `create_plugin` / `on_unload` / `on_config_update`
+**症状**：日志 `加载插件失败 [local.xxx]`。
+**根因**：MaiBot 插件生命周期要求实现三个钩子；`@Tool` 的参数不能直接 import `ToolParamInfo`（不在 SDK 导出里）。
+**处理**：
+- 文件末尾写 `def create_plugin() -> YourPlugin: return YourPlugin()`
+- 实现 `on_load / on_unload / on_config_update` 三个 async 方法
+- `@Tool(parameters={...})` 用完整 JSON Schema dict（`{"type":"object","properties":{...},"required":[...]}`）
 
-| 操作 | 方法 |
+### 3.2 改配置不生效
+| 配置 | 生效方式 |
 |---|---|
-| **开机后启动全套** | 双击 `start-all.cmd`（或右键 start-all.ps1 →「使用 PowerShell 运行」；若被执行策略挡住就用 cmd） |
-| 停止服务 | 双击 `stop-all.cmd`（QQ 保持在线） |
-| SnowLuma 管理面板 | http://127.0.0.1:5099 （admin，密码见 CREDENTIALS.md） |
-| MaiBot 管理面板 | http://127.0.0.1:8001 （令牌见 `maibot\data\webui.json`） |
-| 和麦麦说话 | 群里 @麦麦 或 直接私聊小号 |
+| `bot_config.toml`（人设/开关） | **热重载**，保存即生效 |
+| `model_config.toml`（模型分配） | **必须重启** |
+| 插件 `config.toml` | 触发 `on_config_update`（通常热更） |
+| 插件 `plugin.py` 代码 | **必须重启** |
 
-## 四、麦麦能做什么
+### 3.3 日志在哪
+`maibot\logs\app_YYYYMMDD_HHMMSS.log.jsonl`（每次启动一个新文件）。
+提示词快照在 `maibot\logs\maisaka_prompt\`——排查「模型看到了什么」的最佳入口。
 
-| 能力 | 状态 | 说明 |
+### 3.4 A_Memorix 初始化失败：已有活动写者
+**处理**：有残留实例占着锁 → 停止全套（会清锁）→ 再启动。
+锁文件位置随 `[a_memorix.storage] data_dir` 走。
+
+---
+
+## 4. 适配器、表情与出站
+
+### 4.1 表情包「变成文字」
+**根因**：模型写 `/表情名`，但该名字不在 QQ 经典黄脸映射表里 → 转换器不认识 → 原样发出。
+**处理**：在 `qq_face_map.py` 加别名（`QQ_FACE_DESCRIPTIONS.update({...})`，放在 Unicode 表合并**之后**）：
+
+| 模型常写 | 映射到 |
+|---|---|
+| 滑稽（B 站梗） | 呲牙 |
+| 哭 / 伤心 | 大哭 / 难过 |
+| 震惊 / 大惊 | 惊讶 / 惊恐 |
+| 羡慕 | 崇拜 |
+| 心疼 | 拍头 |
+| 馋 | 吃 |
+| 加油 | 鼓掌 |
+| 翻白眼 / 吐血 | 白眼 / 汗 |
+
+> 踩过的次生坑：别名加到了 `QQ_FACE_EMOJIS` 或 `_UNICODE_FACE_DESCRIPTIONS` 里不生效，
+> 必须加到 `QQ_FACE_DESCRIPTIONS`（且在该表 `update` 之后追加）。
+
+### 4.2 句中表情不转换（`呜/捂脸你好`）
+**根因**：转换正则后随边界写成 `(?!\w)`，Python 的 `\w` **包含汉字**，所以表情名后跟汉字时被判为非表情。
+**处理**：改为 `(?![A-Za-z0-9_])`。
+
+### 4.3 英文字母颜文字禁不掉（awa / qwq / owo）
+**根因**：人设写了禁令，回复模型照样输出（提示词不可靠）。
+**处理**：**出站物理剥离**（`segment_encoder._build_text_segments`）：
+```python
+LETTER_KAOMOJI_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?:(?:awa|qwq|owo|ovo|uwu|qaq|030|0v0|ono|oto|ata|>_<)+)(?![A-Za-z0-9])",
+    re.IGNORECASE)
+```
+注意：符号颜文字 `(๑•̀ㅂ•́)و✧` 不受影响；`ok`/`QQ` 不误伤；连写 `awaqwqowo` 要能整段剥掉（用 `(?:...)+`）。
+
+### 4.4 模型在回复里写 `[图片: xxx]` / `[表情包: xxx]`
+**根因**：模型模仿聊天历史里的渲染格式。
+**处理**：人设加硬规则「这些标记只会原样变成文字，图片由系统自动附带」，并在适配器做兜底过滤。
+
+### 4.5 出站安全过滤（防泄密）
+在适配器所有 send 动作前检查文本：本机路径（`C:\`、`/home/`、`file://`、`base64://`）、
+凭据（`ak-*`、`sk-*`、`Bearer *`、JWT）、已知密钥字面量 → 命中即整条拦截。
+**注意**：语音消息走 `record` 段，不经过文本过滤 → 语音插件内必须再做一次同样检查。
+
+---
+
+## 5. 人设与模型行为
+
+### 5.1 🔴 乱叫「哥哥」（不认人）
+**根因**：聊天记录渲染成 `user="昵称"`，模型看不到 QQ 号，无法区分主人和群友。
+**处理**：改核心渲染（`src/maisaka/context/planner_messages.py`）为 `昵称(QQ号)`：
+```python
+user_name = user_info.user_nickname or user_info.user_id
+if user_info.user_nickname and user_info.user_id and str(user_info.user_id) != str(user_info.user_nickname):
+    user_name = f"{user_info.user_nickname}({user_info.user_id})"
+```
+再在人设里写「只有 QQ xxx 是哥哥，其他号是陌生人」。
+
+### 5.2 句子太长 / 像客服 / 讲健康道理
+**根因**：人设只写了「简短」，没有给出**具体锚点**；模型默认走「有帮助的 AI」腔。
+**处理**：人设里给**语气示范**和**禁止项**（例如「不说『对身体好』『细嚼慢咽』这种大人的话」），
+并用年龄设定约束认知范围（6 岁 → 只懂零食/动画/玩具）。
+
+### 5.3 表情包序号/消息 ID 编造（attach_emoji 模式）
+**根因**：视觉模型当规划器时会编造参数（`msg_id="m2c4pef"`、`attachment_index=15` 但列表只有 5 个）。
+**处理**：规划器用**纯文本强 Agent 模型**；视觉模型只用于回复/看图。
+
+### 5.4 回复换行被拆成多条
+**根因**：MaiBot 按换行分段发送。
+**处理**：人设写「回复必须一行，颜文字不能拆」；仍偶发属模型问题，可接受。
+
+---
+
+## 6. 记忆与嵌入
+
+### 6.1 🔴 每 3 分钟报 `embedding 任务未配置模型`
+**根因**：`[model_task_config.embedding] model_list = []`，而 A_Memorix 的记忆编码必须要嵌入模型；
+讯飞 MaaS **没有** embedding 端点（只有对话模型）。
+**处理**：起一个本地嵌入服务（OpenAI 兼容 `/v1/embeddings`）：
+- 模型 `BAAI/bge-small-zh-v1.5`（512 维，ONNX，CPU 单条 ~25ms）
+- `pip install fastembed fastapi uvicorn truststore`
+- `model_config.toml` 加 provider（`base_url = "http://127.0.0.1:9890/v1"`）+ embedding 模型 + task 指向它
+
+### 6.2 🔴 `faiss::FileIOWriter ... No such file or directory`（文件明明存在）
+**根因**：faiss 的 C++ 层用 `fopen`，**不支持中文路径**；记忆目录在 `D:\code2\AI伙伴\...`。
+**处理**：`[a_memorix.storage] data_dir` 指向纯英文目录（如 `D:/code2/maibot-memory`），迁移数据后重启。
+**同类**：RVC 的 `.index`（faiss 读）也必须英文路径——所以语音栈整体放 `E:\ai-voice`。
+
+### 6.3 记忆「写了但检索不到」
+检查顺序：① embedding 是否成功（日志搜「编码完成」）② faiss 索引是否写入成功（搜 `faiss`）③ `dimension` 与模型维度是否一致（bge-small-zh = 512）。
+
+---
+
+## 7. 语音栈（GPT-SoVITS + RVC）
+
+### 7.1 🔴 RTX 50 系（Blackwell）装上就用不了
+**根因**：RTX 50 是 sm_120，只有 CUDA 12.8+ 的 PyTorch 才有对应 kernel；老版 cu124 会直接报「no kernel image」或退回 CPU。
+**处理**：`torch==2.7.1+cu128`（GSV）/ `2.11.0+cu128`（Applio），国内走
+`https://mirror.sjtu.edu.cn/pytorch-wheels/cu128/`（比官方源快 10 倍）。
+验证：`torch.cuda.get_device_capability(0) == (12, 0)`。
+
+### 7.2 GPT-SoVITS 装不上：`pyopenjtalk` / `jieba_fast` 需要 MSVC
+**根因**：两个包要编译 C 扩展。
+**处理**：写 shim（中文合成不需要日文 g2p）：
+- `site-packages/jieba_fast/__init__.py` → `from jieba import *`
+- `site-packages/jieba_fast/posseg.py` → `from jieba.posseg import *`
+- `site-packages/pyopenjtalk.py` → 提供同名函数但调用即抛错
+
+### 7.3 `fast-langdetect: Cache directory not found`
+**处理**：先建目录 `GPT_SoVITS/pretrained_models/fast_langdetect`，再启动；它会自动下载
+`lid.176.bin`（125MB，`dl.fbaipublicfiles.com`，国内速度不错）。
+
+### 7.4 🔴 HF 下载 SSL 证书验证失败 / xet 401
+**根因**：本机有 SSL 中间人，Python 的 certifi 不认它的 CA；新版 HF 用 xet 存储协议，镜像不支持。
+**处理**：
+```python
+import truststore; truststore.inject_into_ssl()   # 接系统证书库
+```
+环境变量：`HF_ENDPOINT=https://hf-mirror.com` + `HF_HUB_DISABLE_XET=1`。
+> curl 报 `CRYPT_E_NO_REVOCATION_CHECK` 时改用 PowerShell `Invoke-WebRequest`（走 schannel 系统证书链）。
+
+### 7.5 🔴 Applio 的模型路径是「相对当前工作目录」
+**根因**：`now_dir = os.getcwd()`，contentvec/rmvpe 路径都相对它拼。
+**处理**：启动服务/脚本时工作目录必须是 `E:\ai-voice\Applio`，否则会去下载而不是用本地文件。
+（脚本里 `os.chdir(r"E:\ai-voice\Applio")` 放在最前面。）
+
+### 7.6 每句语音都要 8-10 秒（模型反复加载）
+**根因**：Applio 的 `convert_audio` 每次调用都 `load_hubert`（读 360MB + 上显存）。
+**处理**：在常驻服务里给 `vc.load_hubert` 打补丁，已加载则直接返回：
+```python
+if vc.hubert_model is not None: return
+```
+效果：单句从 ~9s → **~1.8s**。
+
+### 7.7 GPT-SoVITS 没有「音色」可用
+**思路**（本项目做法）：**用 RVC 把通用女声转成目标音色，截 5 秒当 GSV 的参考音频** ——
+等于「用变声器造出音色种子，让 TTS 直接学会这个人的说话方式」。
+参考音频要求：3-10 秒、干净、单声道、16k；`gsv_prompt_text` 必须与音频内容逐字一致。
+
+### 7.8 GPT-SoVITS 音色怪 / 默认加载了错模型
+**根因**：`tts_infer.yaml` 的 `custom` 段写死了别的版本（如 v2 的 s1bert… 而文件没下）。
+**处理**：`custom` 段改成实际下载的版本（`version: v2Pro`、`s1v3.ckpt`、`v2Pro/s2Gv2Pro.pth`）。
+
+### 7.9 TTS/RVC 音色微调（不用改代码）
+| 参数 | 效果 |
+|---|---|
+| `rvc_pitch`（0/+2/+4） | 音高整体上移，输出基频约 340/396/427Hz |
+| `rvc_index_rate`（0-1） | 越大越贴训练音色，过大可能失真 |
+| `edge_rate` / `edge_pitch` | 源 TTS 的语速/音高（仅 edge 引擎） |
+| `tts_engine` | `gsv`（语气自然）/ `edge`（快，机械感） |
+| `rvc_enabled` | TTS 之后是否再串 RVC |
+
+### 7.10 QQ 语音音质偏闷
+**原因**：QQ 语音是窄带压缩（每条 10-60KB），任何模型都会损失高频，属格式限制。
+
+---
+
+## 8. 唱歌（翻唱流水线）
+
+> 结论：GPT-SoVITS 克隆音色、RVC 换音色，**两者都不产生旋律**（音高来自输入的干声）。
+> 要「真唱」必须有一条已经唱好的干声 → 社区通用做法：**原曲 → UVR5 分离人声 → RVC 换音色**。
+
+### 8.1 🔴 成品开头有「鬼叫」
+**根因**：先 RVC 转换再剪辑 —— 干声里前奏残留的伴奏/噪声被 RVC 一起「唱」了。
+**正确顺序**：`UVR 分离 → 噪声门静音前奏残留 → 从第一个有声点剪掉 → RVC → 乐句结尾收尾`。
+**门限**：演唱电平（rms 85 分位）的 10%，连续 0.8 秒才算开唱。
+
+### 8.2 变调不对（男声唱出来是女鬼/女声唱出来是闷雷）
+**处理**：按人声中位 f0 自动定变调：≥240Hz → 0；190-240 → +6；<190 → +12。
+
+### 8.3 批量翻唱太慢
+**处理**：只分离前 85 秒（成品只要 42 秒）；分离与变声用**两个独立 venv**、双 worker 并行（`run_a.cmd` / `run_b.cmd`）。
+
+### 8.4 🔴 含中文的 .cmd 用 WMI 拉起后失效
+**处理**：`.cmd` 必须存 **GBK**（cmd 的码页），`.py` 仍是 UTF-8。
+
+### 8.5 任意歌词合成（DiffSinger）为什么放弃
+HF 上的 mobile onnx 包只有 acoustic + vocoder，**缺音素字典**（token id ↔ 拼音映射），
+喂歌词只能是乱音；要做得引入完整 OpenUtau/DiffSinger 歌手包，属独立工程。
+
+---
+
+## 9. 网络与下载（国内环境）
+
+| 资源 | 加速/绕行 |
+|---|---|
+| PyPI | `--index-url https://pypi.tuna.tsinghua.edu.cn/simple` |
+| PyTorch cu128 | `https://mirror.sjtu.edu.cn/pytorch-wheels/cu128/` |
+| HuggingFace | `https://hf-mirror.com`；`HF_ENDPOINT` + `HF_HUB_DISABLE_XET=1` |
+| GitHub raw/clone | `git clone --depth 1`；必要时 `https://ghfast.top/` 前缀 |
+| 大文件 | `curl.exe -L --retry 3 -o`（支持断点续传） |
+
+**SSL 中间人**：Python 走 `truststore`；curl 走 `-k` 或改用 `Invoke-WebRequest`。
+
+---
+
+## 10. 发布与安全
+
+- 发布到 GitHub 前**必须脱敏**：API key、Token、QQ 号、WebUI 密码 → 占位符 `YOUR_XXX`
+- 二次扫描（正则匹配真实值）确认无残留
+- 不上传：`data/`（聊天记录/记忆）、`logs/`、模型权重、`node.exe`、`CREDENTIALS.md`
+- 第三方插件若目录里有 `.git`，直接 `git add` 会被当成子模块（mode 160000，内容不上传）→ 先删嵌套 `.git`
+
+---
+
+## 11. 排障速查表
+
+| 症状 | 先查 | 处理 |
 |---|---|---|
-| 群聊回复 | ✅ 已验证 | 2026-10-24 16:05 实测：群里说话→规划器→回复成功；被 @ 或被点名必回，有自主发言概率 |
-| 主动私聊主人 | ✅ 已部署 | 适配器私聊工具已启用（enable_private_chat_tool），规划器会自主决定找主人说话 |
-| 记忆 | ✅ 已启用 | A_Memorix 长期记忆系统开启（人物画像/事实写回/跨聊天共享）；讯飞无 embedding，走 BM25 关键词检索（语义检索不可用） |
-| 发空间（说说） | ✅ 已验证 | Maizone：每天 08:00/20:00 时段有 30% 概率自主发说说；主人可说「发条说说」或 `/sendfeed 主题` |
-| 自动阅读空间 | ✅ 已部署 | 每 15 分钟检查好友动态，按概率点赞/评论（22:00-07:00 静默） |
-| 每日日记 | ✅ 已部署 | better-diary：每晚 23:30 基于当天聊天写日记发到空间（当天需 ≥20 条消息素材）；`/日记` 手动触发，`/日记查看` 回看 |
-| 人设 | ✅ 妹妹 | 麦麦＝主人的亲妹妹：乖巧可爱、天真、有点小幽默；主人（大号）是哥哥。改人设：`maibot\config\bot_config.toml` 的 [personality] 三件套，保存即热重载 |
-| 表情包 | ✅ 全能 | ① **回复模型是视觉模型（qwen-vl）**：图片/表情包原生进入她的多模态上下文，真的看得懂内容；② QQ 经典小黄脸：回复里写 `/害羞` `/呲牙` 等自动变表情（enable_text_face_conversion）；③ 表情包偷学：聊天里出现的表情包自动收藏+打标签+复用；④ 表情选择由 emoji 任务（qwen-vl）按情绪匹配 |
+| 麦麦不回消息 | 3101 是否 Established、日志有无新消息 | 断链见 1.1；适配器未连看 1.2 |
+| 端口在监听但接口 404 | 端口归属进程 | 换端口（3100/3101）或杀掉占用者 |
+| 启动脚本闪退/乱码 | .ps1 是否有 BOM、.cmd 是否纯 ASCII | 见 2.1 / 2.2 |
+| 表情出成文字 | 表情名是否在映射表 | 加别名（4.1） |
+| 满屏 awa/qwq | 出站过滤是否生效 | 4.3 |
+| 记忆报 faiss 错误 | `data_dir` 是否英文 | 6.2 |
+| 记忆编码失败 | embedding 任务是否配了模型 | 6.1 |
+| 语音发不出 | 9880/9881 是否在跑、`voice-config.json` | 7.x |
+| 语音很慢（8s+） | hubert 是否被反复加载 | 7.6 |
+| 语音音色不对 | 参考音频 / rvc 参数 | 7.7 / 7.9 |
+| 唱歌开头鬼叫 | 处理顺序是否「先剪后变声」 | 8.1 |
+| 日记/说说没发 | Maizone 概率判定、素材数 | 手动 `/sendfeed` 或 `/日记` |
+| MaiBot 起不来（记忆锁） | 残留写者 | 停止全套（清锁）再启 |
+| WebUI 进不去 | 5099/8001 监听、进程名 | 查 python.exe / node.exe，不是 maibot.exe |
 
-## 五、已验证的测试（2026-10-24）
+---
 
-1. ✅ 链路心跳：SnowLuma↔MaiBot WebSocket 稳定，30 秒心跳正常（含一次 SnowLuma 重启后 5 秒内自动重连）
-2. ✅ 发说说：`send_qzone_msg` 成功，列表回读内容正确（部署验证说说已发布）
-3. ✅ 发群消息：测试群收到系统自检消息（成功）
-4. ✅ 插件全部激活：snowluma-adapter / Maizone / better-diary
-5. ✅ 模型管线（15:30 实测）：dsv4-pro（回复，6.8s）/ dsv4-flash（规划，1.5s）/ spark-flash（工具，1.9s）全部通过 MaiBot 真实管线调用讯飞成功，工具调用正常
-6. ✅ **回复链路实测（16:05）**：真实群消息→规划器（dsv4-flash）→回复器（dsv4-pro）→send_msg 回复成功；下午主人实测多轮对话正常
-7. ✅ 记忆写回（16:18）：A_Memorix 人物事实成功写回长期记忆（person_fact_writeback 工作）
-8. ✅ 妹妹人设 + 记忆 + /表情名 转换 + 颜文字保护（16:47 干净重启后全部生效）
-9. ✅ 视觉回复链路（17:07 起）：回复模型切到 qwen-vl（视觉模型），图片/表情包原生进入回复上下文；qwen-vl 已实测可用（emoji.see/emoji.selector 多次成功调用）
-10. ⚠️ 注意：MaiBot WebUI 的「测试模型」接口用的测试图只有 32×32，会被讯飞以「低于 50×50 分辨率下限」拒绝——视觉模型报这个错不代表模型不可用，真实图片没问题
+## 12. 变更时间线（简）
 
-## 六、已知限制与风险
-
-- **封号风险**：SnowLuma 是非官方协议端（Hook 注入 QQ），违反腾讯用户协议。小号被风控/冻结的风险始终存在，**不要用大号跑协议端**。
-- **QQ 版本匹配**：QQ 自动升级后 Hook 可能失效（表现为：SnowLuma 面板显示 QQ 进程但 injected=false 或消息不收发）。处理：等 SnowLuma 更新，或回退 QQ 版本。
-- **SnowLuma 许可**：source-available，仅限个人非商用使用，不得二次分发修改版。
-- **记忆降级**：讯飞 MaaS 没有 embedding 接口，麦麦的长期记忆用 BM25 关键词检索（效果尚可，但语义联想弱）。若在意，可补一个有 embedding 的模型（改 `maibot\config\model_config.toml` 的 embedding 配置）。
-- **回复换行会拆条**：MaiBot 按换行分段发送，人设里已要求「回复写在一行、颜文字不拆」；若仍出现断行颜文字，说明模型偶发违反格式要求，属提示词层面的小概率问题。
-- **运维关键点**：MaiBot 真正的运行时是 `python.exe`（uv 的 maibot.exe 只是启动跳板），`taskkill /IM maibot.exe` 杀不到任何东西；启停脚本已改用 CIM 按命令行匹配 + 端口判断。重复启动会端口冲突静默退出。
-- PowerShell 直发 API 时中文会变乱码（PS5.1 Latin-1 问题）——已改用 UTF-8 字节体；麦麦本体（Python）不受影响。
-
-## 七、文件地图
-
-```
-D:\code2\AI伙伴\
-├─ start-all.ps1 / stop-all.ps1      # 一键启停
-├─ CREDENTIALS.md                    # 全部凭据（保密）
-├─ BUILD-NOTES.md                    # 本文件
-├─ maibot\                           # 麦麦主程序
-│  ├─ config\bot_config.toml         # 人设/账号（platform=qq, qq_account=YOUR_BOT_QQ）
-│  ├─ config\model_config.toml       # 讯飞 MaaS 模型配置
-│  ├─ config\adapter_policy.toml     # 群/私聊白名单（群 653542979 / 私聊 YOUR_MASTER_QQ）
-│  ├─ plugins\Maizone\               # 发空间插件
-│  ├─ plugins\better-diary\          # 日记插件
-│  └─ plugins\MaiBot-SnowLuma-Adapter\  # 协议适配器
-└─ tools\
-   └─ SnowLuma-v2.1.1\               # 协议端（config\onebot_YOUR_BOT_QQ.json 是 OneBot 端口/token）
-```
-
-## 八、排障速查
-
-| 症状 | 处理 |
+| 日期 | 事项 |
 |---|---|
-| 麦麦不回消息 | 看 `maibot\logs\` 最新 jsonl 日志；确认适配器心跳（搜「心跳」） |
-| QQ 掉线 | 重开 QQ 扫码，SnowLuma 自动重新注入；MaiBot 自动重连 |
-| 全部重启 | `stop-all.ps1` → `start-all.ps1`（脚本按端口/CIM 判断，可重复运行） |
-| WebUI 进不去 | 确认端口 5099 / 8001 在监听；进程名查 python.exe（MaiBot）和 node.exe（SnowLuma），**不要查 maibot.exe** |
-| A_Memorix 初始化失败（已有活动写者） | 有残留实例占着记忆锁：运行 `stop-all.ps1`（会清锁）再 `start-all.ps1` |
-| 说说/日记没发 | Maizone 当天概率判定为不发属正常；`/sendfeed 主题` 手动触发；日记看日志搜 better-diary |
-
-
+| 10-23 | SnowLuma + MaiBot 首次联通，QQ 小号上线 |
+| 10-24 | 适配器/表情/人设首版；三连修复（脚本 BOM、hook 自动注入、图片数上限） |
+| 10-26 | 语音功能（edge-tts）；主动聊天插件；认人渲染补丁；颜文字出站过滤 |
+| 10-28 | 语音栈接入 GPT-SoVITS + RVC（大肥鱼/派蒙等音色）；唱歌流水线 |
+| 10-29 | 本地嵌入服务（bge-small-zh）修复记忆；faiss 中文路径坑修复；端口迁 3100/3101 |
