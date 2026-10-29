@@ -64,7 +64,7 @@ MaiBot 核心（WebUI 8001）
 - **[docs/SETUP.md](docs/SETUP.md)** — 从零完整部署指南（环境/依赖/启动/验证/排错）
 - **[docs/ASSETS.md](docs/ASSETS.md)** — 全部外部资产下载地址与版本
 - **[docs/PATCHES.md](docs/PATCHES.md)** — 对第三方组件的补丁说明
-- **[docs/BUILD-NOTES.md](docs/BUILD-NOTES.md)** — 真机踩坑记录
+- **[docs/BUILD-NOTES.md](docs/BUILD-NOTES.md)** — 踩坑百科：12 类故障的「症状→根因→处理」+ 排障速查表
 
 ## 快速开始
 
