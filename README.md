@@ -59,6 +59,13 @@ MaiBot 核心（WebUI 8001）
     └── PATCHES.md           对适配器与核心的补丁说明
 ```
 
+## 文档
+
+- **[docs/SETUP.md](docs/SETUP.md)** — 从零完整部署指南（环境/依赖/启动/验证/排错）
+- **[docs/ASSETS.md](docs/ASSETS.md)** — 全部外部资产下载地址与版本
+- **[docs/PATCHES.md](docs/PATCHES.md)** — 对第三方组件的补丁说明
+- **[docs/BUILD-NOTES.md](docs/BUILD-NOTES.md)** — 真机踩坑记录
+
 ## 快速开始
 
 1. 安装 [MaiBot](https://github.com/Mai-with-u/MaiBot) 与 [SnowLuma](https://github.com/SnowLuma/SnowLuma)，按各自文档配好
