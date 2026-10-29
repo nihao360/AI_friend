@@ -1,0 +1,12 @@
+[plugin]
+enabled = true
+config_version = "1.0.0"
+
+[voice]
+engine = "rvc"
+rvc_service_url = "http://127.0.0.1:9880/tts"
+voice_name = "zh-CN-XiaoyiNeural"
+rate = "+4%"
+pitch = "+12Hz"
+max_chars = 60
+cooldown_seconds = 90

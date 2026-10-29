@@ -1,0 +1,39 @@
+# 运行时数据与隐私（绝不提交）
+maibot/data/
+maibot/logs/
+maibot/temp/
+maibot/depends-data/
+tmp/
+
+# 真实凭据
+CREDENTIALS.md
+*.secret
+.env
+config/*.local.toml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv*/
+*.egg-info/
+
+# 语音栈与模型
+E:/ai-voice/
+models/
+*.pth
+*.index
+*.onnx
+*.ckpt
+*.safetensors
+
+# 第三方二进制
+tools/SnowLuma*/
+tools/SnowLuma/
+node.exe
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/

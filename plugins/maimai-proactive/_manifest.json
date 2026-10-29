@@ -1,0 +1,32 @@
+{
+  "manifest_version": 2,
+  "id": "local.maimai-proactive",
+  "version": "1.0.0",
+  "name": "maimai-proactive 麦麦主动聊天",
+  "description": "让麦麦像真妹妹一样偶尔主动找哥哥说话：在早安/午后/晚上/晚安四个时段按概率触发 MaiBot 内置主动聊天管线（maisaka.proactive.trigger），由规划器结合记忆和上下文自行决定说什么。内置安静检查（哥哥正在聊就不打扰）、每日上限、重启不丢当日状态。",
+  "author": {
+    "name": "local",
+    "url": "https://local"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://local"
+  },
+  "host_application": {
+    "min_version": "1.2.3",
+    "max_version": "1.3.99"
+  },
+  "sdk": {
+    "min_version": "2.8.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [],
+  "capabilities": [
+    "maisaka.proactive.trigger",
+    "chat.get_stream_by_user_id",
+    "message.get_by_time_in_chat"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN"
+  }
+}

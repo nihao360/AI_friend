@@ -1,0 +1,36 @@
+{
+  "manifest_version": 2,
+  "id": "local.maimai-voice",
+  "version": "1.0.0",
+  "name": "maimai-voice 麦麦语音",
+  "description": "让麦麦自己决定什么时候用语音说话：规划器调用 send_voice 工具，文本经 Edge-TTS（晓伊声线）合成后作为 QQ 语音消息发出。内置冷却与长度上限，文本先过本机路径/凭据特征检查。",
+  "author": {
+    "name": "local",
+    "url": "https://local"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://local"
+  },
+  "host_application": {
+    "min_version": "1.2.3",
+    "max_version": "1.3.99"
+  },
+  "sdk": {
+    "min_version": "2.8.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [
+    {
+      "type": "python_package",
+      "name": "edge-tts",
+      "version_spec": ">=7.0"
+    }
+  ],
+  "capabilities": [
+    "send.custom"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN"
+  }
+}

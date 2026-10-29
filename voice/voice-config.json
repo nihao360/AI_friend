@@ -1,0 +1,14 @@
+{
+  "tts_engine": "edge",
+  "rvc_enabled": true,
+  "rvc_model": "E:/ai-voice/models/paimon/cn/paimon_cn.pth",
+  "rvc_index": "E:/ai-voice/models/paimon/cn/added_IVF522_Flat_nprobe_1_paimon_cn_v2.index",
+  "rvc_pitch": 0,
+  "rvc_index_rate": 0.7,
+  "gsv_url": "http://127.0.0.1:9881/tts",
+  "gsv_ref_audio": "E:/ai-voice/models/ref_dmt.wav",
+  "gsv_prompt_text": "唱歌我非常的开心，我越唱就非常开心，就是开心最重要啦。",
+  "edge_voice": "zh-CN-XiaoyiNeural",
+  "edge_rate": "+4%",
+  "edge_pitch": "+12Hz"
+}

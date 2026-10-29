@@ -1,0 +1,13 @@
+[plugin]
+enabled = true
+config_version = "1.0.0"
+
+[proactive]
+target_user_id = "YOUR_MASTER_QQ"
+daily_max = 4
+min_quiet_minutes = 50
+check_interval_min_minutes = 35
+check_interval_max_minutes = 75
+per_check_probability = 0.3
+active_from_hour = 7
+active_to_hour = 23

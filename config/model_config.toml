@@ -1,0 +1,258 @@
+[inner]
+version = "1.17.24"
+
+[web]
+preview_chars = 4000 # 单次返回的内容预览字数，完整内容通过 read_tool_result 读取。
+services = {} # 联网服务定义；仅添加服务不会启用工具，需要在功能分配中选择。
+
+# ============================================================
+# API 服务商：讯飞 MaaS（OpenAI 兼容接口）
+# 可用模型列表见 https://maas-api.cn-huabei-1.xf-yun.com/v2/models
+# ============================================================
+[[api_providers]]
+name = "xfyun" # API服务商名称
+base_url = "https://maas-api.cn-huabei-1.xf-yun.com/v2" # 讯飞 MaaS BaseURL
+api_key = "ak-YOUR_XFYUN_APP_KEY" # API密钥
+client_type = "openai" # OpenAI 兼容客户端
+auth_type = "bearer" # Bearer 鉴权
+auth_header_name = "Authorization"
+auth_header_prefix = "Bearer"
+auth_query_name = "api_key"
+default_headers = {}
+default_query = {}
+model_list_endpoint = "/models"
+reasoning_parse_mode = "auto" # 推理内容解析模式（spark 系思考模型自动兼容）
+tool_argument_parse_mode = "auto"
+max_retry = 3
+timeout = 120
+retry_interval = 4
+
+# ============================================================
+# API 服务商：DeepSeek 官方（OpenAI 兼容接口）
+# 可用模型：deepseek-flash（V4.1，支持图片输入）/ deepseek-v4-pro（纯文本）
+# ============================================================
+[[api_providers]]
+name = "deepseek" # API服务商名称
+base_url = "https://api.deepseek.com/v1" # DeepSeek 官方 BaseURL
+api_key = "sk-YOUR_DEEPSEEK_KEY" # API密钥
+client_type = "openai" # OpenAI 兼容客户端
+auth_type = "bearer" # Bearer 鉴权
+auth_header_name = "Authorization"
+auth_header_prefix = "Bearer"
+auth_query_name = "api_key"
+default_headers = {}
+default_query = {}
+model_list_endpoint = "/models"
+reasoning_parse_mode = "auto"
+tool_argument_parse_mode = "auto"
+max_retry = 3
+timeout = 120
+retry_interval = 4
+
+# ============================================================
+# API 服务商：本地嵌入服务（E:\ai-voice\embedding-server.py，端口 9890）
+# 模型 bge-small-zh（512 维，CPU 毫秒级），给 embedding 任务用
+# ============================================================
+[[api_providers]]
+name = "local-embed"
+base_url = "http://127.0.0.1:9890/v1"
+api_key = "not-needed"
+client_type = "openai"
+auth_type = "bearer"
+auth_header_name = "Authorization"
+auth_header_prefix = "Bearer"
+auth_query_name = "api_key"
+default_headers = {}
+default_query = {}
+model_list_endpoint = "/models"
+reasoning_parse_mode = "auto"
+tool_argument_parse_mode = "auto"
+max_retry = 2
+timeout = 30
+retry_interval = 2
+
+# ============================================================
+# 模型定义
+# ============================================================
+
+[[models]]
+model_type = "embedding"
+model_identifier = "bge-small-zh" # BAAI/bge-small-zh-v1.5（本地 ONNX，512 维）
+name = "bge-small-zh"
+api_provider = "local-embed"
+price_in = 0.0
+cache_price_in = 0.0
+price_out = 0.0
+price_periods = []
+send_temperature = false
+force_stream_mode = false
+visual = false
+extra_params = {}
+
+[[models]]
+model_type = "llm"
+model_identifier = "deepseek-flash" # DeepSeek-V4.1-Flash（1M 上下文，支持图片输入）
+name = "ds-flash"
+api_provider = "deepseek"
+price_in = 0.0 # 官方按量计费，这里不做统计
+cache_price_in = 0.0
+price_out = 0.0
+price_periods = []
+send_temperature = true
+force_stream_mode = false
+visual = true # 支持视觉输入
+extra_params = {}
+
+[[models]]
+model_type = "llm"
+model_identifier = "deepseek-v4-pro" # DeepSeek-V4-Pro（纯文本，Agent/推理更强）
+name = "ds-pro"
+api_provider = "deepseek"
+price_in = 0.0
+cache_price_in = 0.0
+price_out = 0.0
+price_periods = []
+send_temperature = true
+force_stream_mode = false
+visual = false
+extra_params = {}
+
+[[models]]
+model_type = "llm"
+model_identifier = "xopdeepseekv4pro" # DeepSeek V4 Pro（讯飞托管）
+name = "dsv4-pro"
+api_provider = "xfyun"
+price_in = 0.0 # 讯飞侧计费，这里不做统计
+cache_price_in = 0.0
+price_out = 0.0
+price_periods = []
+send_temperature = true
+force_stream_mode = false
+visual = false
+extra_params = {}
+
+[[models]]
+model_type = "llm"
+model_identifier = "xopdeepseekv4flash0731" # DeepSeek V4 Flash（讯飞托管）
+name = "dsv4-flash"
+api_provider = "xfyun"
+price_in = 0.0
+cache_price_in = 0.0
+price_out = 0.0
+price_periods = []
+send_temperature = true
+force_stream_mode = false
+visual = false
+extra_params = {}
+
+[[models]]
+model_type = "llm"
+model_identifier = "xsparkx2flash" # Spark X2 Flash（快速便宜，思考型）
+name = "spark-flash"
+api_provider = "xfyun"
+price_in = 0.0
+cache_price_in = 0.0
+price_out = 0.0
+price_periods = []
+send_temperature = true
+force_stream_mode = false
+visual = false
+extra_params = {}
+
+[[models]]
+model_type = "llm"
+model_identifier = "xopqwen36v35b" # Qwen3.6 VL 35B（多模态看图）
+name = "qwen-vl"
+api_provider = "xfyun"
+price_in = 0.0
+cache_price_in = 0.0
+price_out = 0.0
+price_periods = []
+send_temperature = true
+force_stream_mode = false
+visual = true # 支持视觉输入
+extra_params = {}
+
+# ============================================================
+# 任务分配
+# ============================================================
+
+[model_task_config.web_search] # 联网服务；留空不开放统一联网工具
+model_list = []
+
+[model_task_config.replyer] # 回复模型：视觉模型（能直接看图/表情包，理解内容后回复）
+model_list = ["ds-flash"]
+max_tokens = 8192
+temperature = 1.0
+selection_strategy = "sequential"
+hard_timeout = 240.0
+
+[model_task_config.planner] # 规划模型：决定行动、调用工具（需要 Agent 能力；视觉模型当规划器会编造 msg_id 等参数，勿用）
+model_list = ["ds-flash"]
+max_tokens = 16384
+temperature = 0.7
+selection_strategy = "sequential"
+hard_timeout = 180.0
+
+[model_task_config.memory] # 记忆模型：长期记忆总结、抽取、写回
+model_list = ["ds-flash"]
+max_tokens = 8192
+temperature = 0.3
+selection_strategy = "sequential"
+hard_timeout = 240.0
+
+[model_task_config.utils] # 工具模型：概括整理等小任务
+model_list = ["ds-flash"]
+max_tokens = 8192
+temperature = 0.5
+selection_strategy = "sequential"
+hard_timeout = 180.0
+
+[model_task_config.learner] # 学习模型；留空时用 utils 模型
+model_list = []
+max_tokens = 8192
+temperature = 0.7
+selection_strategy = "balance"
+hard_timeout = 180.0
+
+[model_task_config.fast_model] # 快速模型：断句、选表达方式等需要快的小任务
+model_list = ["ds-flash"]
+max_tokens = 8192
+temperature = 0.3
+selection_strategy = "sequential"
+hard_timeout = 120.0
+
+[model_task_config.emoji] # 表情包选择模型；留空走 planner/vlm 默认逻辑
+model_list = []
+max_tokens = 8192
+temperature = 0.7
+selection_strategy = "balance"
+hard_timeout = 120.0
+
+[model_task_config.vlm] # 看图模型
+model_list = ["ds-flash"]
+max_tokens = 8192
+temperature = 0.7
+selection_strategy = "sequential"
+hard_timeout = 240.0
+
+[model_task_config.voice] # 语音识别模型（讯飞 MaaS 暂无，留空）
+model_list = []
+max_tokens = 8192
+temperature = 0.7
+selection_strategy = "balance"
+hard_timeout = 120.0
+
+[model_task_config.embedding] # 嵌入模型：本地 bge-small-zh（512维，E:\ai-voice\embedding-server.py）
+model_list = ["bge-small-zh"]
+max_tokens = 4096
+temperature = 0.7
+selection_strategy = "balance"
+hard_timeout = 60.0
+
+[model_task_config.image_embedding] # 图片嵌入模型；留空不启用
+model_list = []
+max_tokens = 4096
+temperature = 0.7
+selection_strategy = "balance"
+hard_timeout = 60.0
